@@ -1,0 +1,9 @@
+/*.ipynb
+.ipynb_checkpoints/
+
+# Python environment
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/

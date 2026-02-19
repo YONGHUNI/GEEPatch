@@ -1,0 +1,21 @@
+name: patch_fetcher
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - geopandas
+  - shapely
+  - pyproj
+  - fiona
+  - gdal
+  - requests
+  - tqdm
+  - tenacity
+  - earthengine-api
+  - geemap
+  - jupyterlab
+  - ipython
+  - ipykernel
+  - ca-certificates
+  - openssl
+prefix: /u/yhsuh/conda-envs/patch_fetcher
