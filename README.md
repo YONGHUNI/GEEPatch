@@ -52,6 +52,38 @@ Instead of raw floating-point GeoTIFFs, data is exported as **8-bit PNGs**.
 
 To maximize throughput while strictly adhering to Google Earth Engine's (GEE) API limits and local memory constraints, the `GEEPatch` core engine employs a highly optimized **Two-Stage Concurrent Processing Architecture**.
 
+```mermaid
+graph TD
+    subgraph 0. Input Configuration
+        A[User ROI & GEE Image] -->|geometry.py| B(Calculate EPSG:3857 Grid)
+    end
+
+    subgraph 1. Stage 1: URL Generation
+        B --> C{ThreadPoolExecutor<br/>max_url_workers=16}
+        C -->|tenacity @retry<br/>Exponential Backoff| D((GEE API))
+        D -->|Return| E[Signed Download URLs]
+    end
+
+    subgraph 2. Stage 2: Data Streaming
+        E --> F{ThreadPoolExecutor<br/>max_dl_workers}
+        F -->|auth.py<br/>Connection Pooling| G((GEE Servers))
+        G -->|Stream Raw .npy| H[processor.py<br/>In-Memory RAM]
+    end
+
+    subgraph 3. On-the-Fly Processing
+        H -->|1. Validate Dimensions| I(Radiometric Normalization<br/>Min-Max Clip)
+        I -->|2. Encode| J(8-bit PNG Converter)
+    end
+
+    subgraph 4. Output Storage
+        J --> K[{XXXX}_{YYYY}_{ZL}_idx{i}.png]
+        B -.->|Geometry Records| L[grid_metadata_z14.gpkg]
+    end
+
+    classDef stage fill:#f9f9f9,stroke:#333,stroke-width:2px;
+    class 1.,2.,3.,4. stage;
+```
+
 
 ### 2.1. Stage 1: Concurrent URL Generation & Exponential Backoff
 * **Mechanism:** The engine first calculates the exact Web Mercator grid coordinates for the target Region of Interest (ROI). It then utilizes a `ThreadPoolExecutor` (configured via `max_url_workers`, default: 16) to concurrently request signed download URLs from the GEE API.
