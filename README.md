@@ -76,7 +76,7 @@ graph TD
     end
 
     subgraph 4. Output Storage
-        J --> K[{XXXX}_{YYYY}_{ZL}_idx{i}.png]
+        J --> K["{XXXX}\_{YYYY}\_{ZL}_idx{i}.png"]
         B -.->|Geometry Records| L[grid_metadata_z14.gpkg]
     end
 
