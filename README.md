@@ -48,19 +48,19 @@ Instead of raw floating-point GeoTIFFs, data is exported as **8-bit PNGs**.
 
 ---
 
-## 2. Architecture: Hybrid Execution Pipeline
+## 2. Architecture: Two-Stage Concurrent Pipeline
 
-To maximize download throughput while adhering to GEE's API rate limits and memory constraints, `GEEPatch` employs a **Hybrid Processing Strategy**:
-
-1. **Inter-Region Sequential Processing (Outer Loop):**
-* Target Regions of Interest (ROIs) are processed one by one.
-* This prevents server-side `TooManyRequests` errors and ensures stable memory usage.
+To maximize throughput while strictly adhering to Google Earth Engine's (GEE) API limits and local memory constraints, the `GEEPatch` core engine employs a highly optimized **Two-Stage Concurrent Processing Architecture**.
 
 
-2. **Intra-Region Parallel Processing (Inner Loop):**
-* For a single region, multiple patches (tiles) within a scene are downloaded concurrently using a `ThreadPoolExecutor`.
-* This hides network latency and maximizes bandwidth utilization.
+### 2.1. Stage 1: Concurrent URL Generation & Exponential Backoff
+* **Mechanism:** The engine first calculates the exact Web Mercator grid coordinates for the target Region of Interest (ROI). It then utilizes a `ThreadPoolExecutor` (configured via `max_url_workers`, default: 16) to concurrently request signed download URLs from the GEE API.
+* **Resilience (`@retry`):** GEE tightly throttles concurrent API computations. To prevent the pipeline from crashing due to `429 Too Many Requests` or transient server errors, the URL generation method is wrapped with a `@retry` decorator (via the `tenacity` library). It employs an **exponential backoff** strategy, meaning the thread will safely pause and automatically retry the request with increasing delays until successful, ensuring 100% fault tolerance.
 
+### 2.2. Stage 2: Concurrent Data Streaming & Processing
+* **Mechanism:** Once the signed URLs are secured, a second `ThreadPoolExecutor` (configured via `max_dl_workers`) is dispatched to handle the heavy data transfer.
+* **In-Memory Processing:** Instead of saving intermediate GeoTIFFs, the raw NPY data streams are downloaded directly into RAM. The data is immediately validated, radiometrically normalized, and encoded into lossless 8-bit PNGs by the processor.
+* **Benefit:** This strictly avoids local I/O bottlenecks and drastically reduces the storage footprint, which is a critical advantage when operating on shared high-performance computing (HPC) file systems.
 
 
 ---
