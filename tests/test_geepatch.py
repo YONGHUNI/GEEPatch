@@ -159,5 +159,61 @@ class TestCore(unittest.TestCase):
         self.assertEqual(url, "http://mock.url/download")
         mock_image.getDownloadURL.assert_called_with(dummy_params)
 
+    @patch('gee_downloader.auth.initialize_gee')
+    def test_download_as_wmts_tiles_format_validation(self, mock_init):
+        """
+        Verify that the orchestrator rejects unsupported output formats 
+        before initiating any heavy API calls or geometry processing.
+        """
+        downloader = GEEPatch()
+        
+        # Provide dummy objects for arguments
+        dummy_image = MagicMock()
+        dummy_roi = MagicMock()
+        
+        # Expect a ValueError to be raised for an unsupported format like 'jpg'
+        with self.assertRaisesRegex(ValueError, "Unsupported output format"):
+            downloader.download_as_wmts_tiles(
+                image=dummy_image,
+                roi=dummy_roi,
+                output_dir="./dummy_dir",
+                zoom=14,
+                bands=['B4'],
+                out_format='jpg' # Invalid format trigger
+            )
+
+    @patch('gee_downloader.auth.initialize_gee')
+    def test_download_raw_tiff_bypass(self, mock_init):
+        """
+        Test the GEO_TIFF download method.
+        Verifies that binary chunks are streamed directly to disk without loading 
+        the full image into RAM or passing through the processor.
+        """
+        downloader = GEEPatch()
+        
+        downloader.session.get = MagicMock()
+        
+        # 1. Mock the requests.Session response and its chunk stream
+        mock_response = MagicMock()
+        mock_response.iter_content.return_value = [b"mock_", b"tiff_", b"data"]
+        
+        # Mock the context manager behavior of the session
+        downloader.session.get.return_value.__enter__.return_value = mock_response
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = os.path.join(temp_dir, "test_output.tif")
+            
+            # 2. Execute the raw bypass download
+            downloader._download_raw_tiff("http://mock.url/tiff", out_path)
+            
+            # 3. Verify that the file was written to disk and chunks were concatenated
+            self.assertTrue(os.path.exists(out_path), "TIFF file was not saved to disk")
+            
+            with open(out_path, 'rb') as f:
+                content = f.read()
+            
+            self.assertEqual(content, b"mock_tiff_data", "File content mismatch")
+            mock_response.raise_for_status.assert_called_once()
+
 if __name__ == '__main__':
     unittest.main()
