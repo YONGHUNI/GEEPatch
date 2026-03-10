@@ -9,6 +9,7 @@ concurrency using a batch processing strategy (URL generation -> File Download).
 import os
 import io
 import ee
+import pandas as pd
 import geopandas as gpd
 from shapely.geometry import box, shape
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -268,14 +269,61 @@ class GEEPatch:
                         grid_records[tile_id]['status'] = 'failed_process'
                         grid_records[tile_id]['error'] = str(e)
 
-        # 7. Metadata Export
+        # 7. Metadata Export (Relational Schema)
         if grid_records:
             try:
-                gdf = gpd.GeoDataFrame(list(grid_records.values()), crs="EPSG:3857")
-                gpkg_path = os.path.join(output_dir, f"grid_metadata_z{zoom}.gpkg")
-                gdf.to_file(gpkg_path, driver="GPKG")
-                return gdf
-            except Exception:
+                # Create a separate subdirectory to isolate metadata
+                meta_dir = os.path.join(output_dir, "metadata")
+                os.makedirs(meta_dir, exist_ok=True)
+                
+                # ---------------------------------------------------------
+                # 7-1. Master Spatial Grid (GeoPackage)
+                # Stores only unique geometries using grid_id as the primary key.
+                # Avoids overwriting if the master grid already exists.
+                # ---------------------------------------------------------
+                grid_geoms = {
+                    f"{v['x']}_{v['y']}_{v['zoom']}": v['geometry']
+                    for v in grid_records.values()
+                }
+                
+                master_gpkg_path = os.path.join(meta_dir, f"master_grid_z{zoom}.gpkg")
+                
+                if not os.path.exists(master_gpkg_path):
+                    gdf_spatial = gpd.GeoDataFrame(
+                        {'grid_id': list(grid_geoms.keys())},
+                        geometry=list(grid_geoms.values()),
+                        crs="EPSG:3857"
+                    )
+                    gdf_spatial.to_file(master_gpkg_path, driver="GPKG")
+
+                # ---------------------------------------------------------
+                # 7-2. Temporal Download Log (CSV)
+                # Stores lightweight tabular data regarding download status.
+                # ---------------------------------------------------------
+                csv_records = []
+                for v in grid_records.values():
+                    csv_records.append({
+                        'grid_id': f"{v['x']}_{v['y']}_{v['zoom']}",
+                        'filename': v['filename'],
+                        'status': v['status'],
+                        'error': v['error']
+                    })
+                
+                df_temporal = pd.DataFrame(csv_records)
+                
+                if filename_prefix:
+                    csv_filename = f"{filename_prefix}_z{zoom}.csv"
+                else:
+                    csv_filename = f"download_log_z{zoom}.csv"
+                    
+                csv_path = os.path.join(meta_dir, csv_filename)
+                df_temporal.to_csv(csv_path, index=False)
+                
+                # Return the DataFrame for immediate memory usage in user scripts
+                return df_temporal
+
+            except Exception as e:
+                print(f"Failed to export relational metadata: {e}")
                 pass
 
         return None
