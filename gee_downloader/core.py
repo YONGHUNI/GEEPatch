@@ -84,6 +84,24 @@ class GEEPatch:
             processor.process_npy_to_png(buffer, output_path, bands, vmin, vmax)
         finally:
             buffer.close()
+            
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
+           retry=retry_if_exception_type(requests.exceptions.RequestException))
+    def _download_raw_tiff(self, url: str, output_path: str):
+        """
+        Downloads GEO_TIFF data from the provided URL directly to disk.
+        
+        This method completely bypasses in-memory buffering and radiometric 
+        normalization, ensuring that 16-bit float/int physical values and 
+        spatial metadata embedded by GEE are preserved identically.
+        """
+        # Stream directly to the file system without holding the entire image in RAM
+        with self.session.get(url, stream=True, timeout=(30, 60)) as response:
+            response.raise_for_status()
+            with open(output_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk: 
+                        f.write(chunk)
 
     def download_as_wmts_tiles(
         self, 
@@ -94,7 +112,8 @@ class GEEPatch:
         bands: List[str], 
         filename_prefix: Optional[str] = None,
         vis_params: Optional[Dict] = None,
-        show_progress: bool = True
+        show_progress: bool = True,
+        out_format: str = 'png' # 'png' or 'tif'
     ) -> Union[gpd.GeoDataFrame, None]:
         """
         Executes the tiled download pipeline for a specific satellite image within an ROI.
@@ -114,10 +133,20 @@ class GEEPatch:
             vis_params (Optional[Dict]): Visualization parameters. Default: {'min': 0, 'max': 3000}.
             show_progress (bool): If True, displays a tqdm progress bar for the download phase. 
                                   Set to False to reduce console clutter in nested loops.
+            out_format (str): The out format to be processed. scaled PNG (png) or GeoTIFF (tif)
 
         Returns:
             Union[gpd.GeoDataFrame, None]: A GeoDataFrame containing tile metadata if successful, else None.
         """
+
+        # Format Validation
+        out_format = out_format.lower()
+        if out_format not in ['png', 'tif', 'tiff']:
+            raise ValueError(f"Unsupported output format: '{out_format}'. Allowed formats are 'png' or 'tif'.")
+        
+        # Normalize extension name for consistency
+        if out_format == 'tiff':
+            out_format = 'tif'
         
         # Ensure output directory exists
         if not os.path.exists(output_dir): 
@@ -170,11 +199,13 @@ class GEEPatch:
                 if not roi_shapely.intersects(box(w, s, e, n)):
                     continue
 
-                # Construct filename
+                # Construct filename - Dynamic file extension based on format
+                ext = out_format
+                
                 if filename_prefix:
-                    filename = f"{x}_{y}_{zoom}_{filename_prefix}.png"
+                    filename = f"{x}_{y}_{zoom}_{filename_prefix}.{ext}"
                 else:
-                    filename = f"{x}_{y}_{zoom}_idx{tile_index}.png"
+                    filename = f"{x}_{y}_{zoom}_idx{tile_index}.{ext}"
                     
                 filepath = os.path.join(output_dir, filename)
                 
@@ -222,11 +253,14 @@ class GEEPatch:
             for task in tasks:
                 # Clip image to tile geometry to avoid edge artifacts
                 img_proc = task['image'].resample('bicubic').clip(task['region'])
+                
+                gee_format = 'GEO_TIFF' if out_format == 'tif' else 'NPY'
+                
                 params = {
                     'crs': 'EPSG:3857', 
                     'crs_transform': task['transform'], 
                     'dimensions': '256x256', 
-                    'format': 'NPY'
+                    'format': gee_format  # Applied dynamically
                 }
                 future_to_task[executor.submit(self._generate_signed_url, img_proc, params)] = task
 
@@ -245,14 +279,24 @@ class GEEPatch:
             with ThreadPoolExecutor(max_workers=self.MAX_DL_WORKERS) as executor:
                 future_to_id = {}
                 for task in download_ready_tasks:
-                    future = executor.submit(
-                        self._download_and_process, 
-                        task['url'], 
-                        task['filepath'], 
-                        bands, 
-                        vmin_arr, 
-                        vmax_arr
-                    )
+                    
+                    if out_format == 'tif':
+                        future = executor.submit(
+                            self._download_raw_tiff, 
+                            task['url'], 
+                            task['filepath']
+                        )
+                    
+                    else:
+                        future = executor.submit(
+                            self._download_and_process, 
+                            task['url'], 
+                            task['filepath'], 
+                            bands, 
+                            vmin_arr, 
+                            vmax_arr
+                        )
+                    
                     future_to_id[future] = task['id']
                 
                 # Optional Progress Bar controlled by 'show_progress'
