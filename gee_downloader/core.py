@@ -144,9 +144,18 @@ class GEEPatch:
         if out_format not in ['png', 'tif', 'tiff']:
             raise ValueError(f"Unsupported output format: '{out_format}'. Allowed formats are 'png' or 'tif'.")
         
-        # Normalize extension name for consistency
+        ## Normalize extension name for consistency
         if out_format == 'tiff':
             out_format = 'tif'
+            
+        # Strict Band Selection
+        if not bands:
+            raise ValueError("The 'bands' parameter cannot be empty. Please specify target bands (e.g., ['B4', 'B3', 'B2']).")
+            
+        # Enforce band filtering directly on the GEE computational graph.
+        # This strictly prevents the silent download of unrequested bands, 
+        # optimizing network bandwidth and disk I/O, especially during TIFF bypass.
+        image = image.select(bands)
         
         # Ensure output directory exists
         if not os.path.exists(output_dir): 
